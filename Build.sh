@@ -102,21 +102,21 @@ LIBFTDINAME=libftdi_0.20_devkit_mingw32_08April2012
 ###############################
 # Filenames for components
 
-BINUTILSFILE=./$BINUTILSNAME.tar.gz
+BINUTILSFILE=./$BINUTILSNAME.tar.xz
 
-GCCFILE=./$GCCNAME.tar.gz
+GCCFILE=./$GCCNAME.tar.xz
 
-GDBFILE=./$GDBNAME.tar.gz
+GDBFILE=./$GDBNAME.tar.xz
 
-JTAGFILE=./$JTAGNAME.tar.gz
+JTAGFILE=./$JTAGNAME.tar.xz
 
-NEWLIBFILE=./$NEWLIBNAME.tar.gz
+NEWLIBFILE=./$NEWLIBNAME.tar.xz
 
-GMPFILE=./$GMPNAME.tar.bz2
+GMPFILE=./$GMPNAME.tar.xz
 
-MPFRFILE=./$MPFRNAME.tar.bz2
+MPFRFILE=./$MPFRNAME.tar.xz
 
-MPCFILE=./$MPCNAME.tar.gz
+MPCFILE=./$MPCNAME.tar.xz
 
 LIBFTDIFILE=./$LIBFTDINAME.zip
 
@@ -168,12 +168,16 @@ function extract {
         unzip -o $FILENAME
 
     elif [ `echo $FILENAME | grep ".tar.gz" -` ]; then
-        echo "Extracting gzipd tar $FILENAME"
+        echo "Extracting gzip'd tar $FILENAME"
         tar -xzvf $FILENAME
 
     elif [ `echo $FILENAME | grep ".tar.bz2" -` ]; then
-        echo "Extracting bzipd tar $FILENAME"
+        echo "Extracting bzip'd tar $FILENAME"
         tar -xjvf $FILENAME
+
+    elif [ `echo $FILENAME | grep ".tar.xz" -` ]; then
+        echo "Extracting xz'd tar $FILENAME"
+        tar -xJvf $FILENAME
 
     fi
 }
@@ -384,7 +388,3 @@ build_gdb
 build_jtag
 
 echo "Toolchain built successfully and installed to $PREFIX"
-
-
-
-
