@@ -1,0 +1,15 @@
+--- ftdi_driver.c	2014-03-28 15:33:34.000000000 +0000
++++ ftdi_driver.c	2014-04-04 09:36:13.542890488 +0100
+@@ -36,10 +36,10 @@
+ 
+ static int dev_num = 0;
+ static int clk_divider = -1;
+-static int clk_rate = -1;
++static int clk_rate = 15000000; /* 15MHz default */
+ static int clk_edge_mode = 0;	//NN mode by default
+ static char *selected_ftdi_serial = NULL;
+-static int enable_uart_channel = 1;
++static int enable_uart_channel = 0;
+ static int uart_channel_reported = 0;
+ extern int xit;
+ extern int protocol;

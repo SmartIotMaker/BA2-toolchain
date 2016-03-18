@@ -1,0 +1,219 @@
+--- gdb/remote-jn51xx.c	2014-04-04 08:22:08.000000000 +0100
++++ gdb/remote-jn51xx.c	2014-10-08 13:14:27.243725442 +0100
+@@ -56,8 +56,14 @@
+ #include "remote-ba.h"
+ #include "remote-jn51xx.h"
+ 
++#define CHIP_ID(a)                      (a & 0x0000FFFF)
++#define CHIP_ID_JN5168                  0x10008686
++#define CHIP_ID_JN5169_COG09            0x10009686
++#define CHIP_ID_JN5169                  0x0000B686
++
+ /* Location of device configuration in memory map */
+ #define JN516x_SYSCTRL_STAT                     0x02000004
++#define JN516x_SYSCTRL_CHIPID                   0x020000FC
+ #define JN516x_CPUCLK_CNTRL                     0x0200109C
+ #define JN516X_FLASH_CTRL                       0x020010E8
+ #define JN516X_INDEX_SECTOR_DEVICE_CONFIG_ADDR  0x01001500
+@@ -96,14 +102,15 @@
+ {
+     struct ba_target_priv   ba_priv;
+     
+-    unsigned int            cpu_clock_control;
+-    
++    unsigned int            chip_id;
+     unsigned int            supported_firmware;
+     
++    unsigned int            cpu_clock_control;
++    
+     unsigned int            flash_size;
+     CORE_ADDR               flash_base;
+     unsigned int            flash_sectors;
+-    unsigned int            flash_sector_size;
++    unsigned int            *flash_sector_sizes; // Array of sizes per sector.
+     
+     unsigned int            ram_size;
+     CORE_ADDR               ram_base;
+@@ -409,6 +416,7 @@
+     int             CpuIndex;
+     int             sector_num;
+     jn51xx_target_priv *tp = ops->to_data;
++    ULONGEST        flash_address;
+ 
+     //printf_unfiltered("%s\n", __FUNCTION__);
+     
+@@ -439,9 +447,12 @@
+     }
+ 
+     /* Unprotect sectors */
+-    for (sector_num = 0; sector_num < tp->flash_sectors; sector_num++)
++    for (flash_address = tp->flash_base, sector_num = 0; 
++         sector_num < tp->flash_sectors; 
++         flash_address += tp->flash_sector_sizes[sector_num], sector_num++)
+     {
+-        if (jn516x_write_word(ops, tp->flash_base + (tp->flash_sector_size * sector_num), 0) != 4)
++        //printf_unfiltered("Unprotecting sector %d at address 0x%08lx\n", sector_num, flash_address);
++        if (jn516x_write_word(ops, flash_address, 0) != 4)
+         {
+             error("Error unlocking sector %d\n", sector_num);
+         }
+@@ -455,10 +466,13 @@
+     }
+     
+     /* Mark sectors for erase */
+-    for (sector_num = 0; sector_num < tp->flash_sectors; sector_num++)
++    for (flash_address = tp->flash_base, sector_num = 0; 
++         sector_num < tp->flash_sectors; 
++         flash_address += tp->flash_sector_sizes[sector_num], sector_num++)
+     {
+         // write any value to any address in the selected sector (using base address)
+-        if (jn516x_write_word(ops, tp->flash_base + (tp->flash_sector_size * sector_num), 0xE) != 4)
++        //printf_unfiltered("Marking sector %d at address 0x%08lx for erase\n", sector_num, flash_address);
++        if (jn516x_write_word(ops, flash_address, 0xE) != 4)
+         {
+             error("Error marking sector %d\n", sector_num);
+         }
+@@ -676,6 +690,7 @@
+ {
+     jn51xx_target_priv *tp = ops->to_data;
+     int sector_num;
++    ULONGEST flash_address;
+     
+     if (tp->flash_page_buffer_size)
+     {
+@@ -689,9 +704,12 @@
+     }
+     
+     /* Protect sectors */
+-    for (sector_num = 0; sector_num < tp->flash_sectors; sector_num++)
++    for (flash_address = tp->flash_base, sector_num = 0; 
++         sector_num < tp->flash_sectors; 
++         flash_address += tp->flash_sector_sizes[sector_num], sector_num++)
+     {
+-        if (jn516x_write_word(ops, tp->flash_base + (tp->flash_sector_size * sector_num), 0x01000000) != 4)
++        //printf_unfiltered("Marking sector %d at address 0x%08lx for protect\n", sector_num, flash_address);
++        if (jn516x_write_word(ops, flash_address, 0x01000000) != 4)
+         {
+             error("Error locking sector %d\n", sector_num);
+         }
+@@ -813,9 +831,34 @@
+         /* Initialise stuff necessary for flash access */
+         gdb_byte readbuf[4];
+         uint32_t configuration;
+-        uint32_t flash_size;
++        uint32_t flash_sectors;
+         uint32_t ram_size;
++        uint32_t chip_id;
+         uint32_t cpu_clock_control;
++        uint32_t flash_sectors_mask = 0x07;
++        int      i;
++        
++        if (jn516x_read_word(&jn51xx_jtag_ops, JN516x_SYSCTRL_CHIPID, &chip_id) != 4)
++        {
++            error("Error reading JN516x Chip ID\n");
++        }
++        else
++        {
++            switch (CHIP_ID(chip_id))
++            {
++                case(CHIP_ID(CHIP_ID_JN5168)): 
++                    flash_sectors_mask = 0x07;
++                    break; 
++                    
++                case(CHIP_ID(CHIP_ID_JN5169_COG09)):
++                case(CHIP_ID(CHIP_ID_JN5169)):
++                    flash_sectors_mask = 0x0F;
++                    break;
++                    
++                default:
++                    break;
++            }
++        }
+         
+         if (jn516x_read_word(&jn51xx_jtag_ops, JN516x_CPUCLK_CNTRL, &cpu_clock_control) != 4)
+         {
+@@ -827,23 +870,65 @@
+             error("Error reading JN516x configuration\n");
+         }
+         
+-        flash_size  = ((configuration >> 24) & 0x07) >> 0;
+-        ram_size    = ((configuration >> 24) & 0x30) >> 4;
++        flash_sectors   = ((configuration >> 24) & flash_sectors_mask);
++        ram_size        = ((configuration >> 24) & 0x30) >> 4;
++        
++        tp->supported_firmware = (flash_sectors << 24) | (ram_size << 16) | ((chip_id >> 12) & 0xFF);
+         
+-        tp->supported_firmware = (flash_size << 24) | (ram_size << 16) | 0x08;
++        switch (CHIP_ID(chip_id))
++        { 
++            case(CHIP_ID(CHIP_ID_JN5168)): 
++                tp->flash_sectors = flash_sectors + 1;
++                tp->flash_sector_sizes = xmalloc(sizeof(unsigned int) * tp->flash_sectors);
++                tp->flash_size  = (tp->flash_sectors * 32) * 1024;
++                
++                for (i = 0; i < tp->flash_sectors; i++)
++                {
++                    tp->flash_sector_sizes[i] = 0x8000;
++                }
++                break; 
++                    
++            case(CHIP_ID(CHIP_ID_JN5169_COG09)): 
++            case(CHIP_ID(CHIP_ID_JN5169)):
++                // JN5169 has up to 15 32k sectors plus an additional 8 small 4k sectors
++                if (flash_sectors == 15)
++                {
++                    // If all 15 32k sectors are available, make the additional 8 small 4k sectors available
++                    tp->flash_sectors = flash_sectors + 8;
++                }
++                else
++                {
++                    tp->flash_sectors = flash_sectors;
++                }
++                tp->flash_sector_sizes = xmalloc(sizeof(unsigned int) * tp->flash_sectors);
++                tp->flash_size  = 0;
++                
++                for (i = 0; i < tp->flash_sectors; i++)
++                {
++                    if (i < 15)
++                    {
++                        tp->flash_sector_sizes[i] = 0x8000;
++                    }
++                    else
++                    {
++                        tp->flash_sector_sizes[i] = 0x1000;
++                    }
++                    tp->flash_size += tp->flash_sector_sizes[i];
++                }
++                break;
++                
++            default:
++                break;
++        }
+         
+-        flash_size  = ((flash_size + 1) * 32) * 1024;
+-        ram_size    = ((ram_size   + 1) *  8) * 1024;
++        ram_size = ((ram_size + 1) *  8) * 1024;
+         
+-        printf_unfiltered("Detected JN516x with %dk flash and %dk RAM\n", flash_size / 1024, ram_size / 1024);
++        printf_unfiltered("Detected JN516x with %dk flash and %dk RAM\n", tp->flash_size / 1024, ram_size / 1024);
+ 
++        tp->chip_id = chip_id;
+         tp->cpu_clock_control = cpu_clock_control;
+-        // For JN5168
+-        tp->flash_size = flash_size;
++
+         tp->flash_base = 0x80000;
+-        tp->flash_sectors = 8;
+-        tp->flash_sector_size = 0x8000;
+-        
+         tp->ram_size   = ram_size;
+         tp->ram_base   = 0x04000000;
+         
+@@ -901,6 +986,7 @@
+             bfd_vma version = bfd_get_32(exec_bfd, section_data);
+             if (memcmp(&version, &tp->supported_firmware, section->size))
+             {
++                printf_unfiltered("Connected device requires firmware with ID 0x%08X, file has 0x%08X\n", tp->supported_firmware, (uint32_t)version);
+                 error("Firmware file is incompatible with connected device");
+             }
+         }
